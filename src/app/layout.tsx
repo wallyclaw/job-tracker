@@ -8,17 +8,29 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="bg-gray-50 text-gray-900 min-h-screen">
-        <nav className="bg-white border-b border-gray-200 px-6 py-3">
-          <div className="max-w-7xl mx-auto flex items-center gap-6">
-            <a href="/" className="text-lg font-bold text-gray-900">🎯 Job Tracker</a>
-            <a href="/" className="text-sm text-gray-600 hover:text-gray-900">Jobs</a>
-            <a href="/resume" className="text-sm text-gray-600 hover:text-gray-900">Resume</a>
-            <a href="/add" className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">+ Add Job</a>
+    <html lang="en" className="light">
+      <body className="bg-slate-50 text-slate-900 min-h-screen">
+        <nav className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-40">
+          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-8">
+              <a href="/" className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                🎯 Job Tracker
+              </a>
+              <div className="flex items-center gap-1">
+                <a href="/" className="text-sm font-medium text-slate-600 hover:text-slate-900 px-3 py-1.5 rounded-md hover:bg-slate-100 transition-colors">
+                  Dashboard
+                </a>
+                <a href="/resume" className="text-sm font-medium text-slate-600 hover:text-slate-900 px-3 py-1.5 rounded-md hover:bg-slate-100 transition-colors">
+                  Resume
+                </a>
+              </div>
+            </div>
+            <a href="/add" className="text-sm font-medium bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 shadow-sm hover:shadow transition-all">
+              + Add Job
+            </a>
           </div>
         </nav>
-        <main className="max-w-7xl mx-auto px-6 py-6">
+        <main className="max-w-7xl mx-auto px-6 py-8">
           {children}
         </main>
       </body>
