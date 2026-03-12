@@ -1,106 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
-import type { Job } from '@/lib/types';
-
-// Simple regex-based parser (no external AI API needed — works offline)
-function parseJobDescription(description: string) {
-  const sections = {
-    requirements: [] as string[],
-    responsibilities: [] as string[],
-    preferred: [] as string[],
-    companyInfo: '',
-    compensation: '',
-  };
-
-  const lines = description.split('\n').map(l => l.trim()).filter(Boolean);
-  
-  let currentSection = '';
-  
-  for (const line of lines) {
-    const lower = line.toLowerCase();
-    
-    // Detect section headers
-    if (lower.match(/^(requirements|qualifications|what you.?ll need|what we.?re looking for|must have|minimum qualifications)/)) {
-      currentSection = 'requirements';
-      continue;
-    }
-    if (lower.match(/^(responsibilities|what you.?ll do|what you.?ll be doing|the role|job description|about the role)/)) {
-      currentSection = 'responsibilities';
-      continue;
-    }
-    if (lower.match(/^(preferred|nice to have|bonus|ideal|plus|desired)/)) {
-      currentSection = 'preferred';
-      continue;
-    }
-    if (lower.match(/^(about the company|about us|who we are|company)/)) {
-      currentSection = 'company';
-      continue;
-    }
-    if (lower.match(/^(compensation|salary|pay|benefits|perks)/)) {
-      currentSection = 'compensation';
-      continue;
-    }
-    
-    // Add content to current section
-    const bullet = line.replace(/^[-•·*]\s*/, '').trim();
-    if (!bullet) continue;
-    
-    switch (currentSection) {
-      case 'requirements':
-        sections.requirements.push(bullet);
-        break;
-      case 'responsibilities':
-        sections.responsibilities.push(bullet);
-        break;
-      case 'preferred':
-        sections.preferred.push(bullet);
-        break;
-      case 'company':
-        sections.companyInfo += (sections.companyInfo ? ' ' : '') + bullet;
-        break;
-      case 'compensation':
-        sections.compensation += (sections.compensation ? ' ' : '') + bullet;
-        break;
-    }
-  }
-
-  // Extract salary from description if not in sections
-  if (!sections.compensation) {
-    const salaryMatch = description.match(/\$[\d,]+(?:\s*[-–]\s*\$[\d,]+)?(?:\s*(?:per year|annually|\/year|base))?/i);
-    if (salaryMatch) sections.compensation = salaryMatch[0];
-  }
-
-  return sections;
-}
+import type { Job, ResumeSection } from '@/lib/types';
+import { parseJobDescription, analyzeMatch } from '@/lib/parser';
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as Job | undefined;
-  
+
   if (!job) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   if (!job.original_description) return NextResponse.json({ error: 'No description to parse' }, { status: 400 });
-  
+
+  // Parse the job description
   const parsed = parseJobDescription(job.original_description);
-  
+
   // Get resume skills for match analysis
   const skillsSection = db.prepare("SELECT content FROM resume_sections WHERE section_type = 'skills'").get() as { content: string } | undefined;
-  let matchScore = 0;
-  let matchAnalysis = '';
-  
+  const allResumeSkills: string[] = [];
   if (skillsSection) {
     const skills = JSON.parse(skillsSection.content);
-    const allSkills = skills.categories.flatMap((c: { skills: string[] }) => c.skills).map((s: string) => s.toLowerCase());
-    const descLower = job.original_description.toLowerCase();
-    
-    const matched = allSkills.filter((s: string) => descLower.includes(s.toLowerCase()));
-    const missing = allSkills.filter((s: string) => !descLower.includes(s.toLowerCase()));
-    
-    matchScore = Math.round((matched.length / allSkills.length) * 100);
-    matchAnalysis = JSON.stringify({ matched, missing, score: matchScore });
+    for (const cat of skills.categories) {
+      allResumeSkills.push(...cat.skills);
+    }
   }
-  
+
+  // Get about-me knowledge
+  const aboutMe = db.prepare('SELECT topic, details, proficiency FROM about_me').all() as Array<{ topic: string; details: string; proficiency: string | null }>;
+
+  // Analyze match
+  const match = analyzeMatch(parsed.keySkills, allResumeSkills, aboutMe, job.original_description);
+
+  // Save parsed data
   db.prepare(`
-    UPDATE jobs SET 
+    UPDATE jobs SET
       parsed_requirements = ?,
       parsed_responsibilities = ?,
       parsed_preferred = ?,
@@ -116,11 +47,61 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     JSON.stringify(parsed.preferred),
     parsed.companyInfo,
     parsed.compensation,
-    matchScore,
-    matchAnalysis,
+    match.score,
+    JSON.stringify(match),
     id,
   );
-  
+
+  // Auto-create a tailored resume version
+  const baseSections = db.prepare('SELECT * FROM resume_sections WHERE is_active = 1 ORDER BY section_order ASC').all() as ResumeSection[];
+
+  // Check if a version already exists for this job
+  const existingVersion = db.prepare('SELECT id FROM resume_versions WHERE job_id = ?').get(id);
+
+  if (!existingVersion) {
+    // Clone base resume and apply tailoring based on match analysis
+    const tailoredSections = baseSections.map((s: ResumeSection) => {
+      const content = JSON.parse(s.content);
+
+      if (s.section_type === 'skills' && match.matchedAboutMe.length > 0) {
+        // Add skills from About Me that are proficient+ but not on resume
+        const toAdd = match.matchedAboutMe
+          .filter(a => a.proficiency === 'expert' || a.proficiency === 'proficient')
+          .map(a => a.topic);
+
+        if (toAdd.length > 0 && content.categories) {
+          // Add to a "Highlighted for this role" category or existing relevant one
+          content.categories.push({
+            name: 'Additional Relevant',
+            skills: toAdd,
+          });
+        }
+      }
+
+      return {
+        section_type: s.section_type,
+        title: s.title,
+        content: JSON.stringify(content),
+      };
+    });
+
+    const tailoringNotes = [
+      `Auto-generated for ${job.company} - ${job.title}`,
+      `Match score: ${match.score}%`,
+      match.tailoringTips.length > 0 ? `Tips: ${match.tailoringTips.join('; ')}` : '',
+      match.gapSkills.length > 0 ? `Gaps to address: ${match.gapSkills.join(', ')}` : '',
+    ].filter(Boolean).join('\n');
+
+    db.prepare(
+      'INSERT INTO resume_versions (job_id, version_name, sections, tailoring_notes) VALUES (?, ?, ?, ?)'
+    ).run(
+      id,
+      `${job.company} - ${job.title}`,
+      JSON.stringify(tailoredSections),
+      tailoringNotes,
+    );
+  }
+
   const updated = db.prepare('SELECT * FROM jobs WHERE id = ?').get(id);
   return NextResponse.json(updated);
 }

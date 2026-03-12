@@ -11,9 +11,12 @@ export default function JobDetailPage() {
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Partial<Job>>({});
   const [parsing, setParsing] = useState(false);
+  const [resumeVersions, setResumeVersions] = useState<Array<{ id: number; version_name: string; tailoring_notes: string | null; created_at: string }>>([]);
+  const [creatingResume, setCreatingResume] = useState(false);
 
   useEffect(() => {
     fetch(`/api/jobs/${params.id}`).then(r => r.json()).then(setJob);
+    fetch(`/api/jobs/${params.id}/resume`).then(r => r.json()).then(setResumeVersions);
   }, [params.id]);
 
   const parseJob = async () => {
@@ -100,23 +103,53 @@ export default function JobDetailPage() {
             </div>
           </div>
           {matchAnalysis && (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <h3 className="text-sm font-medium text-green-700 mb-2">✅ Matching Skills ({matchAnalysis.matched?.length || 0})</h3>
-                <div className="flex flex-wrap gap-1">
-                  {matchAnalysis.matched?.map((s: string, i: number) => (
-                    <span key={i} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{s}</span>
-                  ))}
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <h3 className="text-sm font-medium text-green-700 mb-2">✅ On Resume ({matchAnalysis.matchedSkills?.length || 0})</h3>
+                  <div className="flex flex-wrap gap-1">
+                    {(matchAnalysis.matchedSkills || matchAnalysis.matched)?.map((s: string, i: number) => (
+                      <span key={i} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{s}</span>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-sm font-medium text-red-600 mb-2">❌ Gaps ({matchAnalysis.gapSkills?.length || 0})</h3>
+                  <div className="flex flex-wrap gap-1">
+                    {(matchAnalysis.gapSkills || matchAnalysis.missing)?.map((s: string, i: number) => (
+                      <span key={i} className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded">{s}</span>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div>
-                <h3 className="text-sm font-medium text-gray-500 mb-2">⬜ Not Mentioned ({matchAnalysis.missing?.length || 0})</h3>
-                <div className="flex flex-wrap gap-1">
-                  {matchAnalysis.missing?.map((s: string, i: number) => (
-                    <span key={i} className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">{s}</span>
-                  ))}
+
+              {matchAnalysis.matchedAboutMe?.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-medium text-blue-700 mb-2">💡 Known from About Me (not on resume yet)</h3>
+                  <div className="space-y-1">
+                    {matchAnalysis.matchedAboutMe.map((a: { topic: string; proficiency: string; details: string }, i: number) => (
+                      <div key={i} className="flex items-center gap-2 text-xs">
+                        <span className={`px-2 py-0.5 rounded ${a.proficiency === 'expert' ? 'bg-green-100 text-green-700' : a.proficiency === 'proficient' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                          {a.proficiency}
+                        </span>
+                        <span className="font-medium">{a.topic}</span>
+                        <span className="text-gray-500">— {a.details}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {matchAnalysis.tailoringTips?.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded p-3">
+                  <h3 className="text-sm font-medium text-amber-800 mb-1">📝 Tailoring Tips</h3>
+                  <ul className="space-y-1">
+                    {matchAnalysis.tailoringTips.map((tip: string, i: number) => (
+                      <li key={i} className="text-xs text-amber-700">• {tip}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -146,6 +179,49 @@ export default function JobDetailPage() {
           {parsing ? 'Parsing...' : '🔍 Parse Job Description'}
         </button>
       )}
+
+      {/* Resume Versions */}
+      <div className="bg-white rounded-lg border p-6 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Tailored Resumes</h2>
+          <button
+            onClick={async () => {
+              setCreatingResume(true);
+              await fetch(`/api/jobs/${params.id}/resume`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version_name: `${job?.company} - ${job?.title}` }),
+              });
+              const versions = await fetch(`/api/jobs/${params.id}/resume`).then(r => r.json());
+              setResumeVersions(versions);
+              setCreatingResume(false);
+            }}
+            disabled={creatingResume}
+            className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {creatingResume ? 'Creating...' : '+ Create Tailored Resume'}
+          </button>
+        </div>
+        {resumeVersions.length === 0 ? (
+          <p className="text-sm text-gray-500">No tailored resumes yet. Create one to customize your resume for this role.</p>
+        ) : (
+          <div className="space-y-2">
+            {resumeVersions.map(v => (
+              <div key={v.id} className="flex items-center justify-between p-3 bg-gray-50 rounded">
+                <div>
+                  <span className="text-sm font-medium">{v.version_name}</span>
+                  <span className="text-xs text-gray-500 ml-2">{new Date(v.created_at).toLocaleDateString()}</span>
+                  {v.tailoring_notes && <p className="text-xs text-gray-500 mt-1">{v.tailoring_notes}</p>}
+                </div>
+                <div className="flex gap-2">
+                  <a href={`/resume/version/${v.id}`} className="text-xs text-blue-600 hover:underline">Edit</a>
+                  <a href={`/api/resume/preview?versionId=${v.id}`} target="_blank" className="text-xs text-blue-600 hover:underline">Preview</a>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Original description */}
       {job.original_description && (

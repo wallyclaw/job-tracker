@@ -3,15 +3,64 @@
 import { useEffect, useState } from 'react';
 import type { ResumeSection } from '@/lib/types';
 
+interface ResumeVersion {
+  id: number;
+  job_id: number;
+  version_name: string;
+  sections: string;
+  tailoring_notes: string | null;
+  page_break_before: string | null;
+  created_at: string;
+  job_title: string;
+  job_company: string;
+}
+
 export default function ResumePage() {
   const [sections, setSections] = useState<ResumeSection[]>([]);
+  const [versions, setVersions] = useState<ResumeVersion[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<string>('base');
   const [editing, setEditing] = useState<number | null>(null);
   const [editContent, setEditContent] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/resume').then(r => r.json()).then(data => { setSections(data); setLoading(false); });
+    Promise.all([
+      fetch('/api/resume').then(r => r.json()),
+      fetch('/api/resume/versions').then(r => r.json()),
+    ]).then(([resumeData, versionsData]) => {
+      setSections(resumeData);
+      setVersions(versionsData);
+      setLoading(false);
+    });
   }, []);
+
+  // Load version sections when selection changes
+  useEffect(() => {
+    if (selectedVersion === 'base') {
+      fetch('/api/resume').then(r => r.json()).then(setSections);
+    } else {
+      const version = versions.find(v => v.id === parseInt(selectedVersion));
+      if (version) {
+        const parsed = JSON.parse(version.sections);
+        // Convert to ResumeSection-like format for the editor
+        const fakeSections: ResumeSection[] = parsed.map((s: { section_type: string; title: string; content: unknown }, i: number) => ({
+          id: i + 1,
+          section_type: s.section_type,
+          section_order: i,
+          title: s.title,
+          content: typeof s.content === 'string' ? s.content : JSON.stringify(s.content),
+          is_active: 1,
+          created_at: version.created_at,
+          updated_at: version.created_at,
+        }));
+        setSections(fakeSections);
+      }
+    }
+  }, [selectedVersion, versions]);
+
+  const previewUrl = selectedVersion === 'base'
+    ? '/api/resume/preview'
+    : `/api/resume/preview?versionId=${selectedVersion}`;
 
   const startEdit = (section: ResumeSection) => {
     setEditing(section.id);
@@ -19,7 +68,6 @@ export default function ResumePage() {
   };
 
   const saveEdit = async (id: number) => {
-    // Validate JSON
     try {
       JSON.parse(editContent);
     } catch {
@@ -27,11 +75,30 @@ export default function ResumePage() {
       return;
     }
 
-    await fetch('/api/resume', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, content: editContent }),
-    });
+    if (selectedVersion === 'base') {
+      await fetch('/api/resume', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, content: editContent }),
+      });
+    } else {
+      // Update the version's sections
+      const version = versions.find(v => v.id === parseInt(selectedVersion));
+      if (version) {
+        const parsed = JSON.parse(version.sections);
+        const idx = id - 1; // fakeSections use 1-indexed ids
+        if (parsed[idx]) {
+          parsed[idx].content = JSON.parse(editContent);
+        }
+        await fetch(`/api/jobs/${version.job_id}/resume/${version.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sections: JSON.stringify(parsed) }),
+        });
+        // Update local versions state
+        setVersions(versions.map(v => v.id === version.id ? { ...v, sections: JSON.stringify(parsed) } : v));
+      }
+    }
 
     setSections(sections.map(s => s.id === id ? { ...s, content: editContent } : s));
     setEditing(null);
@@ -43,7 +110,32 @@ export default function ResumePage() {
     <div className="max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Resume Builder</h1>
-        <a href="/api/resume/preview" target="_blank" className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">Preview PDF ↗</a>
+        <a href={previewUrl} target="_blank" className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
+          Preview PDF ↗
+        </a>
+      </div>
+
+      {/* Version Selector */}
+      <div className="bg-white rounded-lg border p-4 mb-6">
+        <label className="block text-sm font-medium text-gray-700 mb-2">Resume Version</label>
+        <select
+          value={selectedVersion}
+          onChange={e => setSelectedVersion(e.target.value)}
+          className="w-full border rounded px-3 py-2 text-sm"
+        >
+          <option value="base">📄 Base Resume</option>
+          {versions.map(v => (
+            <option key={v.id} value={v.id}>
+              🎯 {v.version_name} — {v.job_company} ({new Date(v.created_at).toLocaleDateString()})
+            </option>
+          ))}
+        </select>
+        {selectedVersion !== 'base' && (() => {
+          const v = versions.find(ver => ver.id === parseInt(selectedVersion));
+          return v?.tailoring_notes ? (
+            <p className="text-xs text-gray-500 mt-2">📝 {v.tailoring_notes}</p>
+          ) : null;
+        })()}
       </div>
 
       <div className="space-y-4">

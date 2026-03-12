@@ -6,8 +6,8 @@ const AUTH_PASSWORD = process.env.JT_PASSWORD || 'cloudcode2026';
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow login page and login API
-  if (pathname === '/login' || pathname === '/api/auth') {
+  // Allow login page, login API, and all API routes (for cron/external integrations)
+  if (pathname === '/login' || pathname.startsWith('/api/')) {
     return NextResponse.next();
   }
 

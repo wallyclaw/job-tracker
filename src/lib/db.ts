@@ -59,6 +59,29 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
   );
+
+  -- Tailored resume versions per job
+  CREATE TABLE IF NOT EXISTS resume_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    version_name TEXT NOT NULL,
+    sections TEXT NOT NULL, -- Full JSON of all resume sections (snapshot)
+    tailoring_notes TEXT, -- What was changed and why
+    page_break_before TEXT DEFAULT 'certifications', -- Which section starts page 2
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+  );
+
+  -- About Me knowledge base — things Warren tells us about his experience
+  CREATE TABLE IF NOT EXISTS about_me (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL, -- tools, skills, experience, preferences, strengths
+    topic TEXT NOT NULL, -- e.g. "Snowflake", "Team leadership", "Python"
+    details TEXT NOT NULL, -- What Warren said about it
+    proficiency TEXT, -- expert, proficient, familiar, learning, none
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
 `);
 
 // Check if resume is seeded
@@ -186,3 +209,10 @@ function seedResume(db: Database.Database) {
 }
 
 export default db;
+
+// Migration: add page_break_before column if missing
+try {
+  db.prepare("SELECT page_break_before FROM resume_versions LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE resume_versions ADD COLUMN page_break_before TEXT DEFAULT 'certifications'");
+}
